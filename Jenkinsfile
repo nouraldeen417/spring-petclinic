@@ -110,9 +110,11 @@ spec:
         container('trivy') {
           sh '''
             trivy image --input ${WORKSPACE}/image.tar \
+              --scanners vuln \
               --severity HIGH,CRITICAL \
               --ignore-unfixed \
               --exit-code 1 \
+              --timeout 15m \
               --cache-dir /tmp/trivy
           '''
         }
