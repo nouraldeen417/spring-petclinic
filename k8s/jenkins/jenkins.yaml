@@ -77,10 +77,10 @@ spec:
               mountPath: /var/jenkins_home
           resources:
             requests:
-              memory: "512Mi"
+              memory: "1Gi"
               cpu: "250m"
             limits:
-              memory: "1Gi"
+              memory: "2Gi"
       volumes:
         - name: jenkins-home
           persistentVolumeClaim:
