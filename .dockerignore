@@ -1,0 +1,39 @@
+# Build output
+target/
+build/
+image.tar
+*.tar
+
+# Git and CI files
+.git/
+.gitignore
+.github/
+Jenkinsfile
+
+# Kubernetes and infra files (not needed inside the image)
+k8s/
+infra/
+kind-config.yaml
+
+# Docker files
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# IDE and OS files
+.idea/
+.vscode/
+.settings/
+.classpath
+.project
+*.iml
+.DS_Store
+
+# Docs and logs
+*.md
+*.log
+
+# Secrets (never in an image)
+.env
+*.pem
+*.key

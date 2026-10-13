@@ -46,3 +46,34 @@ out/
 _site/
 *.css
 !petclinic.css
+
+# Maven build output
+target/
+build/
+
+# Image file made by the pipeline
+image.tar
+*.tar
+
+# IDE files
+.idea/
+.vscode/
+.settings/
+.classpath
+.project
+*.iml
+*.ipr
+*.iws
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Secrets and local settings
+.env
+*.pem
+*.key
+kubeconfig*
