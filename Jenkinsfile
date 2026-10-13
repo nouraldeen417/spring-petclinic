@@ -98,7 +98,7 @@ spec:
               --dockerfile=${WORKSPACE}/Dockerfile \
               --destination=${IMAGE_REPO}:${IMAGE_TAG} \
               --no-push \
-              --tarPath=${WORKSPACE}/image.tar
+              --tarPath=${WORKSPACE}/image.tar \
               --ignore-path=/product_uuid
           '''
         }
