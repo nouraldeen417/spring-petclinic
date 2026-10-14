@@ -2,49 +2,49 @@ pipeline {
   agent {
     kubernetes {
       yaml '''
-apiVersion: v1
-kind: Pod
-spec:
-  serviceAccountName: jenkins-deployer
-  containers:    
-    - name: maven
-      image: maven:3.9-eclipse-temurin-17
-      command: ["sleep"]
-      args: ["infinity"]
-      resources:
-        requests:
-          memory: "1Gi"
-          cpu: "500m"
-        limits:
-          memory: "2Gi"
-    - name: kaniko
-      image: gcr.io/kaniko-project/executor:v1.23.2-debug
-      command: ["/busybox/cat"]
-      tty: true
-      resources:
-        requests:
-          memory: "1Gi"
-          cpu: "500m"
-        limits:
-          memory: "2Gi"
-    - name: trivy
-      image: aquasec/trivy:0.58.0
-      command: ["sleep"]
-      args: ["infinity"]
-      resources:
-        requests:
-          memory: "512Mi"
-        limits:
-          memory: "1Gi"
-    - name: crane
-      image: gcr.io/go-containerregistry/crane:debug
-      command: ["/busybox/cat"]
-      tty: true
-    - name: kubectl
-      image: alpine/k8s:1.31.2
-      command: ["sleep"]
-      args: ["infinity"]
-'''
+          apiVersion: v1
+          kind: Pod
+          spec:
+            serviceAccountName: jenkins-deployer
+            containers:    
+              - name: maven
+                image: maven:3.9-eclipse-temurin-17
+                command: ["sleep"]
+                args: ["infinity"]
+                resources:
+                  requests:
+                    memory: "1Gi"
+                    cpu: "500m"
+                  limits:
+                    memory: "2Gi"
+              - name: kaniko
+                image: gcr.io/kaniko-project/executor:v1.23.2-debug
+                command: ["/busybox/cat"]
+                tty: true
+                resources:
+                  requests:
+                    memory: "1Gi"
+                    cpu: "500m"
+                  limits:
+                    memory: "2Gi"
+              - name: trivy
+                image: aquasec/trivy:0.58.0
+                command: ["sleep"]
+                args: ["infinity"]
+                resources:
+                  requests:
+                    memory: "512Mi"
+                  limits:
+                    memory: "1Gi"
+              - name: crane
+                image: gcr.io/go-containerregistry/crane:debug
+                command: ["/busybox/cat"]
+                tty: true
+              - name: kubectl
+                image: alpine/k8s:1.31.2
+                command: ["sleep"]
+                args: ["infinity"]
+          '''
       defaultContainer 'maven'
     }
   }
