@@ -89,8 +89,12 @@ pipeline {
 
     stage('Package') {
       steps {
-        sh 'mvn -B package -DskipTests'
-        archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
+        sh '''
+          mvn -B package -DskipTests
+          mkdir -p dist
+          cp target/*.jar dist/app.jar
+        '''
+        archiveArtifacts artifacts: 'dist/app.jar', fingerprint: true
       }
     }
 

@@ -1,7 +1,7 @@
 # Stage 1: prepare layers from the jar the pipeline already built
 FROM eclipse-temurin:17-jre-alpine AS extract
 WORKDIR /app
-COPY target/*.jar app.jar
+COPY dist/app.jar app.jar
 RUN java -Djarmode=tools -jar app.jar extract --layers --destination extracted
 
 # ---------- Stage 2: run ----------
