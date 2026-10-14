@@ -157,7 +157,7 @@ spec:
         container('kubectl') {
           sh '''
             for i in 1 2 3 4 5 6; do
-              wget -qO- http://petclinic.petclinic-dev.svc.cluster.local/actuator/health | grep -q '"status":"UP"' && exit 0
+              wget -qO- petclinic.petclinic-dev.svc.cluster.local/actuator/health | grep -q '"status":"UP"' && exit 0
               sleep 10
             done
             echo "Smoke test failed"
