@@ -39,6 +39,10 @@ spec:
       image: gcr.io/go-containerregistry/crane:debug
       command: ["/busybox/cat"]
       tty: true
+    - name: kubectl
+      image: alpine/k8s:1.31.2
+      command: ["sleep"]
+      args: ["infinity"]
 '''
       defaultContainer 'maven'
     }
@@ -131,6 +135,46 @@ spec:
               crane push ${WORKSPACE}/image.tar ${IMAGE_REPO}:${IMAGE_TAG}
               crane tag ${IMAGE_REPO}:${IMAGE_TAG} ${BUILD_TS}
             '''
+          }
+        }
+      }
+    }
+    stage('Deploy to Dev') {
+      steps {
+        container('kubectl') {
+          sh '''
+            kubectl apply -f k8s/dev/service.yaml
+            sed "s|IMAGE_PLACEHOLDER|${IMAGE_REPO}:${IMAGE_TAG}|" k8s/dev/deployment.yaml | kubectl apply -f -
+          '''
+          script { env.DEPLOYED = 'true' }
+          sh 'kubectl rollout status deployment/petclinic -n petclinic-dev --timeout=180s'
+        }
+      }
+    }
+
+    stage('Smoke Test') {
+      steps {
+        container('kubectl') {
+          sh '''
+            for i in 1 2 3 4 5 6; do
+              wget -qO- http://petclinic.petclinic-dev.svc.cluster.local/actuator/health | grep -q '"status":"UP"' && exit 0
+              sleep 10
+            done
+            echo "Smoke test failed"
+            exit 1
+          '''
+        }
+      }
+    }
+  }
+  
+  post {
+    failure {
+      script {
+        if (env.DEPLOYED == 'true') {
+          container('kubectl') {
+            sh 'kubectl rollout undo deployment/petclinic -n petclinic-dev'
+            sh 'kubectl rollout status deployment/petclinic -n petclinic-dev --timeout=120s'
           }
         }
       }
