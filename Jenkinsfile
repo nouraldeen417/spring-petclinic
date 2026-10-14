@@ -6,6 +6,7 @@ apiVersion: v1
 kind: Pod
 spec:
   containers:
+    serviceAccountName: jenkins-deployer
     - name: maven
       image: maven:3.9-eclipse-temurin-17
       command: ["sleep"]
