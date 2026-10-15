@@ -70,7 +70,13 @@ pipeline {
         }
       }
     }
-
+    stage('Maven Settings') {
+      steps {
+        configFileProvider([configFile(fileId: 'maven-settings', variable: 'MAVEN_SETTINGS')]) {
+          sh 'mkdir -p ~/.m2 && cp "$MAVEN_SETTINGS" ~/.m2/settings.xml'
+        }
+      }
+    }
     stage('Compile') {
       steps {
         sh 'mvn -B clean compile'
