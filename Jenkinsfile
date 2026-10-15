@@ -107,12 +107,40 @@ pipeline {
         }
       }
     }
-    stage('Package') {
+    stage('Publish Jar') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'nexus-ci',
+            usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
+          sh '''
+            BASE=$(mvn -B -q help:evaluate -Dexpression=project.version -DforceStdout | sed 's/-SNAPSHOT//')
+            VERSION="${BASE}-${IMAGE_TAG}"
+            G=$(mvn -B -q help:evaluate -Dexpression=project.groupId -DforceStdout)
+            A=$(mvn -B -q help:evaluate -Dexpression=project.artifactId -DforceStdout)
+            URL="${NEXUS_URL}/repository/maven-releases/$(echo "$G" | tr . /)/${A}/${VERSION}/${A}-${VERSION}.jar"
+
+            if curl -fsI "$URL" > /dev/null; then
+              echo "Version ${VERSION} is already in Nexus, skipping upload"
+            else
+              mvn -B -q versions:set -DnewVersion="${VERSION}" -DgenerateBackupPoms=false
+              mvn -B deploy -DskipTests \
+                -DaltDeploymentRepository=nexus-releases::${NEXUS_URL}/repository/maven-releases/
+            fi
+          '''
+        }
+      }
+    }
+
+    stage('Fetch Jar') {
       steps {
         sh '''
-          mvn -B package -DskipTests
+          VERSION="$(mvn -B -q help:evaluate -Dexpression=project.version -DforceStdout)"
+          BASE=$(echo "$VERSION" | sed 's/-SNAPSHOT//; s/-[0-9a-f]\\{7\\}$//')
+          VERSION="${BASE}-${IMAGE_TAG}"
+          G=$(mvn -B -q help:evaluate -Dexpression=project.groupId -DforceStdout)
+          A=$(mvn -B -q help:evaluate -Dexpression=project.artifactId -DforceStdout)
           mkdir -p dist
-          cp target/*.jar dist/app.jar
+          curl -fsS -o dist/app.jar "${NEXUS_URL}/repository/maven-releases/$(echo "$G" | tr . /)/${A}/${VERSION}/${A}-${VERSION}.jar"
+          ls -la dist/app.jar
         '''
         archiveArtifacts artifacts: 'dist/app.jar', fingerprint: true
       }
