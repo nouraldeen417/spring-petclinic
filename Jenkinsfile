@@ -51,6 +51,8 @@ pipeline {
 
   environment {
     IMAGE_REPO = 'docker.io/nouraldeen152/petclinic'
+    SONAR_ORG  = 'nouraldeen417'
+    SONAR_PROJECT = 'nouraldeen417_spring-petclinic'
   }
 
   options {
@@ -86,7 +88,19 @@ pipeline {
         }
       }
     }
-
+    stage('SonarQube Cloud') {
+      steps {
+        withCredentials([string(credentialsId: 'sonar-cloud-token', variable: 'SONAR_TOKEN')]) {
+          sh '''
+            mvn -B org.sonarsource.scanner.maven:sonar-maven-plugin:5.1.0.4751:sonar \
+              -Dsonar.host.url=https://sonarcloud.io \
+              -Dsonar.organization=${SONAR_ORG} \
+              -Dsonar.projectKey=${SONAR_PROJECT} \
+              -Dsonar.qualitygate.wait=true
+          '''
+        }
+      }
+    }
     stage('Package') {
       steps {
         sh '''
