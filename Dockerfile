@@ -16,7 +16,7 @@ RUN addgroup -S app && adduser -S app -G app
 USER app
 
 # Copy layers: least changing first
-COPY --from=extract /app/target/*.jar app.jar
+COPY --from=extract /app/app.jar app.jar
 
 EXPOSE 8080
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "app.jar"]
