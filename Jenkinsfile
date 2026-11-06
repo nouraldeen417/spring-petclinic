@@ -219,6 +219,42 @@ pipeline {
         }
       }
     }
+    
+    stage('Approve Staging') {
+      steps {
+        timeout(time: 30, unit: 'MINUTES') {
+          input message: 'Promote this image to staging?', ok: 'Deploy'
+        }
+      }
+    }
+
+    stage('Deploy to Staging') {
+      steps {
+        container('kubectl') {
+          sh '''
+            kubectl apply -f k8s/staging/service.yaml
+            sed "s|IMAGE_PLACEHOLDER|${IMAGE_REPO}:${IMAGE_TAG}|" k8s/staging/deployment.yaml | kubectl apply -f -
+          '''
+          script { env.DEPLOYED_STAGING = 'true' }
+          sh 'kubectl rollout status deployment/petclinic -n petclinic-staging --timeout=300s'
+        }
+      }
+    }
+
+    stage('Smoke Test Staging') {
+      steps {
+        container('kubectl') {
+          sh '''
+            for i in 1 2 3 4 5 6; do
+              wget -qO- petclinic.petclinic-staging.svc.cluster.local/actuator/health | grep -q '"status":"UP"' && break
+              sleep 10
+            done
+            wget -qO- 'petclinic.petclinic-staging.svc.cluster.local/owners?lastName=Franklin' | grep -q Franklin
+          '''
+        }
+      }
+    }
+    
   }
   
   post {
