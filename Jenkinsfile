@@ -1,50 +1,8 @@
+@Library('petclinic-shared-library@main') _
 pipeline {
   agent {
     kubernetes {
-      yaml '''
-          apiVersion: v1
-          kind: Pod
-          spec:
-            serviceAccountName: jenkins-deployer
-            containers:    
-              - name: maven
-                image: maven:3.9-eclipse-temurin-17
-                command: ["sleep"]
-                args: ["infinity"]
-                resources:
-                  requests:
-                    memory: "1Gi"
-                    cpu: "500m"
-                  limits:
-                    memory: "2Gi"
-              - name: kaniko
-                image: gcr.io/kaniko-project/executor:v1.23.2-debug
-                command: ["/busybox/cat"]
-                tty: true
-                resources:
-                  requests:
-                    memory: "1Gi"
-                    cpu: "500m"
-                  limits:
-                    memory: "2Gi"
-              - name: trivy
-                image: aquasec/trivy:0.58.0
-                command: ["sleep"]
-                args: ["infinity"]
-                resources:
-                  requests:
-                    memory: "512Mi"
-                  limits:
-                    memory: "1Gi"
-              - name: crane
-                image: gcr.io/go-containerregistry/crane:debug
-                command: ["/busybox/cat"]
-                tty: true
-              - name: kubectl
-                image: alpine/k8s:1.31.2
-                command: ["sleep"]
-                args: ["infinity"]
-          '''
+      yaml libraryResource('pods/ci.yaml')
       defaultContainer 'maven'
     }
   }
@@ -70,13 +28,11 @@ pipeline {
         }
       }
     }
+
     stage('Maven Settings') {
-      steps {
-        configFileProvider([configFile(fileId: 'maven-settings', variable: 'MAVEN_SETTINGS')]) {
-          sh 'mkdir -p ~/.m2 && cp "$MAVEN_SETTINGS" ~/.m2/settings.xml'
-        }
-      }
+      steps { mavenSettings() }
     }
+
     stage('Compile') {
       steps {
         sh 'mvn -B clean compile'
@@ -84,189 +40,74 @@ pipeline {
     }
 
     stage('Test') {
-      steps {
-        sh 'mvn -B test jacoco:report'
-      }
-      post {
-        always {
-          junit testResults: 'target/surefire-reports/*.xml', allowEmptyResults: true
-          recordCoverage(tools: [[parser: 'JACOCO']])
-        }
-      }
+      steps { mavenTest() }
     }
-    stage('SonarQube Cloud') {
-      steps {
-        withCredentials([string(credentialsId: 'sonar-cloud-token', variable: 'SONAR_TOKEN')]) {
-          sh '''
-            mvn -B org.sonarsource.scanner.maven:sonar-maven-plugin:5.1.0.4751:sonar \
-              -Dsonar.host.url=https://sonarcloud.io \
-              -Dsonar.organization=${SONAR_ORG} \
-              -Dsonar.projectKey=${SONAR_PROJECT} \
-              -Dsonar.qualitygate.wait=true
-          '''
-        }
-      }
-    }
-    stage('Publish Jar') {
-      steps {
-        withCredentials([usernamePassword(credentialsId: 'nexus-ci',
-            usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
-          sh '''
-            BASE=$(mvn -B -q help:evaluate -Dexpression=project.version -DforceStdout | sed 's/-SNAPSHOT//')
-            VERSION="${BASE}-${IMAGE_TAG}"
-            G=$(mvn -B -q help:evaluate -Dexpression=project.groupId -DforceStdout)
-            A=$(mvn -B -q help:evaluate -Dexpression=project.artifactId -DforceStdout)
-            URL="${NEXUS_URL}/repository/maven-releases/$(echo "$G" | tr . /)/${A}/${VERSION}/${A}-${VERSION}.jar"
 
-            if curl -fsI "$URL" > /dev/null; then
-              echo "Version ${VERSION} is already in Nexus, skipping upload"
-            else
-              mvn -B -q versions:set -DnewVersion="${VERSION}" -DgenerateBackupPoms=false
-              mvn -B deploy -DskipTests \
-                -DaltDeploymentRepository=nexus-releases::${NEXUS_URL}/repository/maven-releases/
-            fi
-          '''
+    stage('SonarQube Cloud') {
+      steps { sonarScan(org: env.SONAR_ORG, project: env.SONAR_PROJECT) }
+    }
+
+    stage('Compute Version') {
+      steps {
+        script {
+          def art = artifactInfo(tag: env.IMAGE_TAG)
+          env.ART_VERSION = art.version
+          env.ART_URL     = art.url
         }
       }
+    }
+
+    stage('Publish Jar') {
+      steps { publishJar(version: env.ART_VERSION, url: env.ART_URL) }
     }
 
     stage('Fetch Jar') {
-      steps {
-        sh '''
-          VERSION="$(mvn -B -q help:evaluate -Dexpression=project.version -DforceStdout)"
-          BASE=$(echo "$VERSION" | sed 's/-SNAPSHOT//; s/-[0-9a-f]\\{7\\}$//')
-          VERSION="${BASE}-${IMAGE_TAG}"
-          G=$(mvn -B -q help:evaluate -Dexpression=project.groupId -DforceStdout)
-          A=$(mvn -B -q help:evaluate -Dexpression=project.artifactId -DforceStdout)
-          mkdir -p dist
-          curl -fsS -o dist/app.jar "${NEXUS_URL}/repository/maven-releases/$(echo "$G" | tr . /)/${A}/${VERSION}/${A}-${VERSION}.jar"
-          ls -la dist/app.jar
-        '''
-        archiveArtifacts artifacts: 'dist/app.jar', fingerprint: true
-      }
+      steps { fetchJar(url: env.ART_URL) }
     }
 
-    stage('Build Image') {
-      steps {
-        container('kaniko') {
-          sh '''
-            /kaniko/executor \
-              --context=dir://${WORKSPACE} \
-              --dockerfile=${WORKSPACE}/Dockerfile \
-              --destination=${IMAGE_REPO}:${IMAGE_TAG} \
-              --no-push \
-              --tarPath=${WORKSPACE}/image.tar \
-              --ignore-path=/product_uuid
-          '''
-        }
-      }
-    }
-
-    stage('Trivy Scan') {
-      steps {
-        container('trivy') {
-          sh '''
-            trivy image --input ${WORKSPACE}/image.tar \
-              --scanners vuln \
-              --severity HIGH,CRITICAL \
-              --ignore-unfixed \
-              --exit-code 1 \
-              --timeout 15m \
-              --cache-dir /tmp/trivy
-          '''
-        }
-      }
-    }
-
-    stage('Push Image') {
-      steps {
-        container('crane') {
-          withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
-              usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
-            sh '''
-              echo "$DH_PASS" | crane auth login index.docker.io -u "$DH_USER" --password-stdin
-              crane push ${WORKSPACE}/image.tar ${IMAGE_REPO}:${IMAGE_TAG}
-              crane tag ${IMAGE_REPO}:${IMAGE_TAG} ${BUILD_TS}
-            '''
-          }
-        }
-      }
-    }
-    stage('Deploy to Dev') {
-      steps {
-        container('kubectl') {
-          sh '''
-            kubectl apply -f k8s/dev/service.yaml
-            sed "s|IMAGE_PLACEHOLDER|${IMAGE_REPO}:${IMAGE_TAG}|" k8s/dev/deployment.yaml | kubectl apply -f -
-          '''
-          script { env.DEPLOYED = 'true' }
-          sh 'kubectl rollout status deployment/petclinic -n petclinic-dev --timeout=180s'
-        }
-      }
-    }
-
-    stage('Smoke Test') {
-      steps {
-        container('kubectl') {
-          sh '''
-            for i in 1 2 3 4 5 6; do
-              wget -qO- petclinic.petclinic-dev.svc.cluster.local/actuator/health | grep -q '"status":"UP"' && exit 0
-              sleep 10
-            done
-            echo "Smoke test failed"
-            exit 1
-          '''
-        }
-      }
+    stage('Build Image') { 
+      steps { buildImage(repoUrl: env.IMAGE_REPO, tag: env.IMAGE_TAG) } 
     }
     
-    stage('Approve Staging') {
+    stage('Trivy Scan')  { 
+      steps { scanImage() }
+    }
+    
+    stage('Push Image')  { 
+      steps { pushImage(repoUrl: env.IMAGE_REPO, tag: env.IMAGE_TAG, timeStamp: env.BUILD_TS) } 
+    }
+    
+    stage('Deploy to Dev') {
       steps {
-        timeout(time: 30, unit: 'MINUTES') {
-          input message: 'Promote this image to staging?', ok: 'Deploy'
-        }
+        deployToK8s(namespace: 'petclinic-dev', manifestDir: 'k8s/dev',
+                    repoUrl: env.IMAGE_REPO, tag: env.IMAGE_TAG)
       }
+    }
+
+    stage('Smoke Test Dev') {
+      steps {
+        smokeTest(namespace: 'petclinic-dev',
+                  dataPath: '/owners?lastName=Franklin', dataExpect: 'Franklin')
+      }
+    }
+
+    stage('Approve Staging') {
+      steps { approve(message: 'Promote this image to staging?') }
     }
 
     stage('Deploy to Staging') {
       steps {
-        container('kubectl') {
-          sh '''
-            kubectl apply -f k8s/staging/service.yaml
-            sed "s|IMAGE_PLACEHOLDER|${IMAGE_REPO}:${IMAGE_TAG}|" k8s/staging/deployment.yaml | kubectl apply -f -
-          '''
-          script { env.DEPLOYED_STAGING = 'true' }
-          sh 'kubectl rollout status deployment/petclinic -n petclinic-staging --timeout=300s'
-        }
+        deployToK8s(namespace: 'petclinic-staging', manifestDir: 'k8s/staging',
+                    repoUrl: env.IMAGE_REPO, tag: env.IMAGE_TAG)
       }
     }
 
     stage('Smoke Test Staging') {
       steps {
-        container('kubectl') {
-          sh '''
-            for i in 1 2 3 4 5 6; do
-              wget -qO- petclinic.petclinic-staging.svc.cluster.local/actuator/health | grep -q '"status":"UP"' && break
-              sleep 10
-            done
-            wget -qO- 'petclinic.petclinic-staging.svc.cluster.local/owners?lastName=Franklin' | grep -q Franklin
-          '''
-        }
+        smokeTest(namespace: 'petclinic-staging',
+                  dataPath: '/owners?lastName=Franklin', dataExpect: 'Franklin')
       }
     }
-    
   }
   
-  post {
-    failure {
-      script {
-        if (env.DEPLOYED == 'true') {
-          container('kubectl') {
-            sh 'kubectl rollout undo deployment/petclinic -n petclinic-dev'
-            sh 'kubectl rollout status deployment/petclinic -n petclinic-dev --timeout=120s'
-          }
-        }
-      }
-    }
-  }
 }
