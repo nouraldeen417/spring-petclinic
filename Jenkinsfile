@@ -4,9 +4,9 @@ pipeline {
   agent none
 
   environment {
-    IMAGE_REPO    = 'docker.io/YOUR_DOCKERHUB_USER/petclinic'
-    SONAR_ORG     = 'YOUR_ORG_KEY'
-    SONAR_PROJECT = 'YOUR_PROJECT_KEY'
+    IMAGE_REPO = 'docker.io/nouraldeen152/petclinic'
+    SONAR_ORG  = 'nouraldeen417'
+    SONAR_PROJECT = 'nouraldeen417_spring-petclinic'
   }
 
   options {
