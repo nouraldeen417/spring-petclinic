@@ -1,3 +1,20 @@
+# =============================================================================
+# PetClinic in the staging namespace. Deployed by the PIPELINE after the manual
+# approval, with the SAME image tag that passed dev. Nothing is rebuilt.
+# Do NOT run "kubectl apply" on this file by hand. IMAGE_PLACEHOLDER is replaced
+# by sed in the pipeline first.
+#
+# Difference from dev: a real database. The postgres profile and the connection
+# settings below make the app use PostgreSQL instead of H2.
+# PREREQUISITE, created BY HAND (see platform/staging-db/README.md):
+#   - the Postgres StatefulSet and Service named petclinic-db
+#   - the Secret petclinic-db (keys: username, password, database)
+# Kubernetes gives the Secret values to the pod. The pipeline's service account
+# cannot read Secrets.
+#
+# replicas is 1 for a small laptop. With Postgres, more than one replica is
+# possible, because all pods share the same data.
+# =============================================================================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,20 +35,28 @@ spec:
       containers:
         - name: petclinic
           image: IMAGE_PLACEHOLDER
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: IfNotPresent    # see the note in k8s/dev/deployment.yaml
           ports:
             - containerPort: 8080
           env:
+            # Turns on the application settings for PostgreSQL.
             - name: SPRING_PROFILES_ACTIVE
               value: postgres
+            # The host name is the Service from platform/staging-db/postgres.yaml.
+            # The database name (petclinic) is written here, and it must match the
+            # "database" value in the Secret.
             - name: SPRING_DATASOURCE_URL
               value: jdbc:postgresql://petclinic-db:5432/petclinic
+            # These environment variables override the values in the application's
+            # properties files (Spring Boot's standard names).
             - name: SPRING_DATASOURCE_USERNAME
               valueFrom:
                 secretKeyRef: {name: petclinic-db, key: username}
             - name: SPRING_DATASOURCE_PASSWORD
               valueFrom:
                 secretKeyRef: {name: petclinic-db, key: password}
+          # The probes are the same as in dev: see k8s/dev/deployment.yaml.
+          # Staging starts slower because it connects to the database.
           startupProbe:
             httpGet:
               path: /actuator/health/liveness
@@ -54,3 +79,5 @@ spec:
               cpu: "250m"
             limits:
               memory: "1Gi"
+          # Known improvement: add a securityContext (non-root, no extra rights).
+          # The image uses a named user, so a numeric user ID is needed first.

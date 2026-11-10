@@ -1,0 +1,57 @@
+# =============================================================================
+# Deploy rights for the pipeline in petclinic-dev (least privilege)
+# Apply by hand, FIRST (the staging file uses the ServiceAccount made here):
+#   kubectl apply -f platform/rbac/dev-deployer.yaml
+# Check:
+#   kubectl auth can-i patch deployments -n petclinic-dev --as=system:serviceaccount:jenkins-system:jenkins-deployer   -> yes
+#   kubectl auth can-i delete deployments -n petclinic-dev --as=system:serviceaccount:jenkins-system:jenkins-deployer  -> no
+#
+# Only the deploy pod (resources/pods/deploy.yaml in the shared library) runs as
+# this account. The build pod and the image pod run as the default account,
+# which has no rights in the cluster.
+# =============================================================================
+
+# The account lives in jenkins-system (where the pod runs)...
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins-deployer
+  namespace: jenkins-system
+---
+# ...but its rights are in petclinic-dev. A Role is limited to one namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: deployer
+  namespace: petclinic-dev
+rules:
+  # kubectl apply, kubectl rollout status and kubectl rollout undo.
+  # There is no "delete" verb on purpose.
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # Apply the Service, and watch pods during a rollout.
+  # configmaps is allowed, but I believe the pipeline does not use it today.
+  # Remove it for stricter least privilege.
+  - apiGroups: [""]
+    resources: ["services", "pods", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # Read logs when something fails.
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+# Connects the account (jenkins-system) to the Role (petclinic-dev).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: deployer
+  namespace: petclinic-dev
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: deployer
+subjects:
+  - kind: ServiceAccount
+    name: jenkins-deployer
+    namespace: jenkins-system

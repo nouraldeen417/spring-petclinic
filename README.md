@@ -1,181 +1,405 @@
-# Spring PetClinic Sample Application [![Build Status](https://github.com/spring-projects/spring-petclinic/actions/workflows/maven-build.yml/badge.svg)](https://github.com/spring-projects/spring-petclinic/actions/workflows/maven-build.yml)[![Build Status](https://github.com/spring-projects/spring-petclinic/actions/workflows/gradle-build.yml/badge.svg)](https://github.com/spring-projects/spring-petclinic/actions/workflows/gradle-build.yml)
+# PetClinic DevSecOps Platform on Kubernetes
 
-[![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/spring-projects/spring-petclinic) [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://github.com/codespaces/new?hide_repo_select=true&ref=main&repo=7517918)
+**A Kubernetes-native CI/CD pipeline with Jenkins dynamic agents, a reusable shared library, quality and security gates, and automatic rollback. Everything runs on a laptop.**
 
-## Understanding the Spring Petclinic application with a few diagrams
+![Jenkins](https://img.shields.io/badge/Jenkins-D24939?logo=jenkins&logoColor=white)
+![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?logo=kubernetes&logoColor=white)
+![kind](https://img.shields.io/badge/kind-local%20cluster-5B5B5B)
+![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
+![Kaniko](https://img.shields.io/badge/Kaniko-daemonless%20builds-4285F4)
+![Trivy](https://img.shields.io/badge/Trivy-image%20scanning-1904DA)
+![SonarQube Cloud](https://img.shields.io/badge/SonarQube%20Cloud-quality%20gate-4E9BCD?logo=sonarqubecloud&logoColor=white)
+![Nexus](https://img.shields.io/badge/Nexus-artifact%20repository-1B1C30)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F?logo=springboot&logoColor=white)
 
-See the presentation here:  
-[Spring Petclinic Sample Application (legacy slides)](https://speakerdeck.com/michaelisvy/spring-petclinic-sample-application?slide=20)
+> This is a portfolio and learning project. It takes the open source [Spring PetClinic](https://github.com/spring-projects/spring-petclinic) application and builds the whole delivery platform around it: cluster, CI server, artifact repository, quality gate, image scanning, deployment, and rollback. The application code is unchanged. The platform is the work.
 
-> **Note:** These slides refer to a legacy, pre–Spring Boot version of Petclinic and may not reflect the current Spring Boot–based implementation.  
-> For up-to-date information, please refer to this repository and its documentation.
+## Contents
 
+- [What it does](#what-it-does)
+- [Architecture](#architecture)
+- [The pipeline](#the-pipeline)
+- [Features](#features)
+- [Tech stack](#tech-stack)
+- [Quick start](#quick-start)
+- [Repository map](#repository-map)
+- [Results](#results)
+- [Design decisions](#design-decisions)
+- [Lessons learned and known limits](#lessons-learned-and-known-limits)
+- [Roadmap](#roadmap)
+- [About the application](#about-the-application)
+- [Credits and license](#credits-and-license)
 
-## Run Petclinic locally
+## What it does
 
-Spring Petclinic is a [Spring Boot](https://spring.io/guides/gs/spring-boot) application built using [Maven](https://spring.io/guides/gs/maven/) or [Gradle](https://spring.io/guides/gs/gradle/).
-Java 17 or later is required for the build, and the application can run with Java 17 or newer.
+On every change to the `main` branch, Jenkins starts short-lived build pods inside a local Kubernetes cluster. The pipeline compiles and tests the code, checks code quality, stores a versioned jar in Nexus, builds a container image from that jar, scans the image, and pushes it only if the scan passes. It then deploys to a `dev` namespace and runs a smoke test. After a manual approval, the same image is deployed to `staging`, which uses a real PostgreSQL database. If a deployment or a smoke test fails, the pipeline rolls back by itself.
 
-You first need to clone the project locally:
+## Architecture
 
-```bash
-git clone https://github.com/spring-projects/spring-petclinic.git
-cd spring-petclinic
-```
-If you are using Maven, you can start the application on the command-line as follows:
+```mermaid
+flowchart LR
+  dev["Developer"] -->|git push| gh["GitHub"]
 
-```bash
-./mvnw spring-boot:run
-```
-With Gradle, the command is as follows:
+  subgraph kind["kind cluster: petclinic-cluster"]
+    subgraph js["jenkins-system"]
+      jc["Jenkins controller"]
+      ap["Agent pods<br/>maven, image tools, kubectl"]
+    end
+    subgraph nx["nexus-system"]
+      nexus["Nexus<br/>Maven proxy + jar storage"]
+    end
+    subgraph dv["petclinic-dev"]
+      appdev["PetClinic<br/>H2 in memory"]
+    end
+    subgraph st["petclinic-staging"]
+      appst["PetClinic"]
+      pg[("PostgreSQL<br/>StatefulSet + PVC")]
+    end
+  end
 
-```bash
-./gradlew bootRun
-```
-
-You can then access the Petclinic at <http://localhost:8080/>.
-
-<img width="1042" alt="petclinic-screenshot" src="https://cloud.githubusercontent.com/assets/838318/19727082/2aee6d6c-9b8e-11e6-81fe-e889a5ddfded.png">
-
-You can, of course, run Petclinic in your favorite IDE.
-See below for more details.
-
-## Building a Container
-
-There is no `Dockerfile` in this project. You can build a container image (if you have a docker daemon) using the Spring Boot build plugin:
-
-```bash
-./mvnw spring-boot:build-image
-```
-
-## Running the Container Image
-
-```bash
-docker images | grep petclinic
-docker run -p 8080:8080 docker.io/library/spring-petclinic:latest
-```
-
-## In case you find a bug/suggested improvement for Spring Petclinic
-
-Our issue tracker is available [here](https://github.com/spring-projects/spring-petclinic/issues).
-
-## Database configuration
-
-In its default configuration, Petclinic uses an in-memory database (H2) which
-gets populated at startup with data. The h2 console is exposed at `http://localhost:8080/h2-console`,
-and it is possible to inspect the content of the database using the `jdbc:h2:mem:<uuid>` URL. The UUID is printed at startup to the console.
-
-A similar setup is provided for MySQL and PostgreSQL if a persistent database configuration is needed. Note that whenever the database type changes, the app needs to run with a different profile: `spring.profiles.active=mysql` for MySQL or `spring.profiles.active=postgres` for PostgreSQL. See the [Spring Boot documentation](https://docs.spring.io/spring-boot/how-to/properties-and-configuration.html#howto.properties-and-configuration.set-active-spring-profiles) for more detail on how to set the active profile.
-
-You can start MySQL or PostgreSQL locally with whatever installer works for your OS or use docker:
-
-```bash
-docker run -e MYSQL_USER=petclinic -e MYSQL_PASSWORD=petclinic -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=petclinic -p 3306:3306 mysql:9.7
+  gh -->|poll| jc
+  jc -->|creates| ap
+  ap -->|dependencies, jar| nexus
+  ap -->|analysis| sonar["SonarQube Cloud"]
+  ap -->|push image| hub["Docker Hub"]
+  ap -->|kubectl apply| appdev
+  ap -->|kubectl apply| appst
+  appst --> pg
 ```
 
-or
+| Namespace | Contains | Managed by |
+| --- | --- | --- |
+| `jenkins-system` | Jenkins controller and the temporary agent pods | Applied by hand (`platform/`) |
+| `nexus-system` | Nexus | Applied by hand |
+| `petclinic-dev` | PetClinic with H2 | The pipeline (`k8s/dev`) |
+| `petclinic-staging` | PetClinic and PostgreSQL | App by the pipeline (`k8s/staging`), database by hand |
 
-```bash
-docker run -e POSTGRES_USER=petclinic -e POSTGRES_PASSWORD=petclinic -e POSTGRES_DB=petclinic -p 5432:5432 postgres:18.4
+## The pipeline
+
+```mermaid
+flowchart TD
+  subgraph P1["Pod 1: maven"]
+    A1["Checkout"] --> A2["Maven settings"] --> A3["Compute version"] --> A4["Compile"] --> A5["Test + JaCoCo"] --> A6["SonarQube quality gate"] --> A7["Publish jar to Nexus"]
+  end
+  subgraph P2["Pod 2: kaniko, trivy, crane"]
+    B1["Checkout"] --> B2["Fetch jar from Nexus"] --> B3["Build image (tar file)"] --> B4["Trivy scan"] --> B5["Push to Docker Hub"]
+  end
+  subgraph P3["Pod 3: kubectl"]
+    C1["Checkout"] --> C2["Deploy to dev"] --> C3["Smoke test"]
+  end
+  APP["Manual approval (no pod)"]
+  subgraph P4["Pod 4: kubectl"]
+    D1["Checkout"] --> D2["Deploy to staging"] --> D3["Smoke test + data check"]
+  end
+  A7 --> B1
+  B5 --> C1
+  C3 --> APP --> D1
+  C2 -.->|failure| RB["Automatic rollback"]
+  C3 -.->|failure| RB
+  D2 -.->|failure| RB
+  D3 -.->|failure| RB
 ```
 
-Further documentation is provided for [MySQL](https://github.com/spring-projects/spring-petclinic/blob/main/src/main/resources/db/mysql/petclinic_db_setup_mysql.txt)
-and [PostgreSQL](https://github.com/spring-projects/spring-petclinic/blob/main/src/main/resources/db/postgres/petclinic_db_setup_postgres.txt).
+How the pieces fit:
 
-Instead of vanilla `docker` you can also use the provided `docker-compose.yml` file to start the database containers. Each one has a service named after the Spring profile:
+- **The Jenkinsfile** in this repository says what runs, and in which pod. It has no long scripts.
+- **The shared library** (a separate repository) holds the logic as small, reusable functions such as `buildImage`, `scanImage`, `deployToK8s`, and `rollbackK8s`.
+- **Pods do not share a disk.** The jar travels through Nexus, and each pod checks out the code again and verifies that it is the same commit.
+- **Images get two tags:** the first 7 characters of the commit (used by Kubernetes, and exact), and the UTC build date and time (easy to read).
+
+## Features
+
+- **Dynamic build agents.** Every build gets fresh pods, with only the tools it needs. The Jenkins controller runs no builds.
+- **Build once, ship what you tested.** One jar per commit is stored in Nexus with the commit in its version. The image is built from that stored jar, never from a second build.
+- **Security before the registry.** Kaniko builds the image to a file, Trivy scans it, and only a scan with no fixable HIGH or CRITICAL findings is pushed.
+- **Quality gate.** SonarQube Cloud checks the code and reads the JaCoCo coverage. A failed gate stops the pipeline before any image exists.
+- **Faster builds.** Maven downloads through a Nexus proxy, so dependencies come from inside the cluster.
+- **Least privilege.** Separate service accounts: one creates agent pods, another only deploys, and only inside two namespaces. It cannot delete anything and cannot read Secrets.
+- **Automatic rollback.** A failed rollout or a failed smoke test runs `kubectl rollout undo`. A failed scan never touches a running environment.
+- **Environments that really differ.** Dev uses H2. Staging uses PostgreSQL with a Secret and a PVC, managed outside the application pipeline.
+- **Reusable library.** The pipeline logic lives in a versioned shared library, so another app can use the same functions with its own parameters.
+- **No secrets in Git.** Tokens and passwords live in Jenkins credentials and Kubernetes Secrets.
+
+## Tech stack
+
+| Area | Tool | Used for |
+| --- | --- | --- |
+| Cluster | kind | Local multi-node Kubernetes (1 control plane, 2 workers) |
+| CI | Jenkins, Kubernetes plugin | Dynamic agent pods |
+| Pipeline code | Declarative pipeline, Groovy shared library | Thin Jenkinsfile, reusable functions |
+| Build | Maven, JUnit, JaCoCo | Compile, test, coverage |
+| Quality | SonarQube Cloud (free plan) | Static analysis and quality gate |
+| Artifacts | Nexus Repository | Maven proxy and jar storage |
+| Images | Kaniko, crane | Build without a Docker daemon, push without a daemon |
+| Security | Trivy | Vulnerability scan of the image |
+| Registry | Docker Hub | Image storage |
+| Deploy | kubectl, plain manifests | Dev and staging deployment, rollback |
+| Database | H2 (dev), PostgreSQL (staging) | In-memory for speed, real database for staging |
+| Access control | Kubernetes RBAC | Role per namespace |
+
+## Quick start
+
+Tested on a laptop with 14 GB of RAM. About 16 GB is more comfortable. Plan for 1 to 2 hours the first time.
+
+### 1. Prerequisites
+
+- Docker, `kind`, `kubectl`, and Git
+- Accounts: GitHub, Docker Hub, and SonarQube Cloud (free plans are enough)
+- Fork this repository and the shared library repository, and clone them
+
+### 2. Create the cluster and the namespaces
 
 ```bash
-docker compose up mysql
+kind create cluster --config platform/kind/kind-config.yaml
+
+kubectl create namespace jenkins-system
+kubectl create namespace nexus-system
+kubectl create namespace petclinic-dev
+kubectl create namespace petclinic-staging
 ```
 
-or
+### 3. Install Jenkins
 
 ```bash
-docker compose up postgres
+kubectl apply -f platform/jenkins/jenkins.yaml
+kubectl get pods -n jenkins-system -w
+kubectl exec -n jenkins-system deploy/jenkins -- cat /var/jenkins_home/secrets/initialAdminPassword
 ```
 
-## Test Applications
+Open `localhost:8081`, log in with that password, and install the plugins: **Kubernetes, Git, Pipeline, Credentials Binding, Coverage, Config File Provider, Timestamper**.
 
-At development time we recommend you use the test applications set up as `main()` methods in `PetClinicIntegrationTests` (using the default H2 database and also adding Spring Boot Devtools), `MySqlTestApplication` and `PostgresIntegrationTests`. These are set up so that you can run the apps in your IDE to get fast feedback and also run the same classes as integration tests against the respective database. The MySql integration tests use Testcontainers to start the database in a Docker container, and the Postgres tests use Docker Compose to do the same thing.
+### 4. Apply the deploy permissions
 
-## Compiling the CSS
+Apply the dev file first. It creates the service account that the staging file also uses.
 
-There is a `petclinic.css` in `src/main/resources/static/resources/css`. It was generated from the `petclinic.scss` source, combined with the [Bootstrap](https://getbootstrap.com/) library. If you make changes to the `scss`, or upgrade Bootstrap, you will need to re-compile the CSS resources using the Maven profile "css", i.e. `./mvnw package -P css`. There is no build profile for Gradle to compile the CSS.
+```bash
+kubectl apply -f platform/rbac/dev-deployer.yaml
+kubectl apply -f platform/rbac/staging-deployer.yaml
 
-## Working with Petclinic in your IDE
+kubectl auth can-i patch deployments -n petclinic-dev --as=system:serviceaccount:jenkins-system:jenkins-deployer    # yes
+kubectl auth can-i delete deployments -n petclinic-dev --as=system:serviceaccount:jenkins-system:jenkins-deployer   # no
+```
 
-### Prerequisites
+### 5. Install Nexus
 
-The following items should be installed in your system:
+```bash
+kubectl apply -f platform/nexus/nexus.yaml
+kubectl port-forward svc/nexus 8082:8081 -n nexus-system
+kubectl exec -n nexus-system deploy/nexus -- cat /nexus-data/admin.password
+```
 
-- Java 17 or newer (full JDK, not a JRE)
-- [Git command line tool](https://help.github.com/articles/set-up-git)
-- Your preferred IDE
-  - Eclipse with the m2e plugin. Note: when m2e is available, there is a m2 icon in `Help -> About` dialog. If m2e is
-  not there, follow the installation process [here](https://www.eclipse.org/m2e/)
-  - [Spring Tools Suite](https://spring.io/tools) (STS)
-  - [IntelliJ IDEA](https://www.jetbrains.com/idea/)
-  - [VS Code](https://code.visualstudio.com)
+Open `localhost:8082` and log in as `admin`. Set a new password and enable anonymous read access. Then create a user `jenkins-ci` with rights for the hosted Maven repositories only.
 
-### Steps
+### 6. Prepare the external services
 
-1. On the command line run:
+- **Docker Hub:** create a repository named `petclinic` and an access token with read and write rights.
+- **SonarQube Cloud:** import your fork, note the organization key and the project key, create a token, and turn **Automatic Analysis off** for the project.
 
-    ```bash
-    git clone https://github.com/spring-projects/spring-petclinic.git
-    ```
+### 7. Configure Jenkins
 
-1. Inside Eclipse or STS:
+| Setting | Value |
+| --- | --- |
+| Built-in node, number of executors | `0` |
+| Kubernetes cloud | Namespace `jenkins-system`, Jenkins URL `jenkins.jenkins-system.svc.cluster.local:8080` (with the plain `http` scheme in front), WebSocket on |
+| Credential `dockerhub-creds` | Username and password (your Docker Hub user and the token) |
+| Credential `sonar-cloud-token` | Secret text |
+| Credential `nexus-ci` | Username and password (the `jenkins-ci` user) |
+| Global environment variable `NEXUS_URL` | `nexus.nexus-system.svc.cluster.local:8081` (with the plain `http` scheme in front) |
+| Managed file `maven-settings` (Config File Provider, Maven settings.xml) | The content below |
+| Global Trusted Pipeline Library | Name `petclinic-shared-library`, default version `main`, Git, your library repository |
 
-    Open the project via `File -> Import -> Maven -> Existing Maven project`, then select the root directory of the cloned repo.
+The addresses are written in Jenkins and not in files, because the application's Maven build fails on plain `http` links in any repository file.
 
-    Then either build on the command line `./mvnw generate-resources` or use the Eclipse launcher (right-click on project and `Run As -> Maven install`) to generate the CSS. Run the application's main method by right-clicking on it and choosing `Run As -> Java Application`.
+```xml
+<settings>
+  <servers>
+    <server>
+      <id>nexus-releases</id>
+      <username>${env.NEXUS_USER}</username>
+      <password>${env.NEXUS_PASS}</password>
+    </server>
+  </servers>
+  <mirrors>
+    <mirror>
+      <id>nexus</id>
+      <mirrorOf>*</mirrorOf>
+      <url>${env.NEXUS_URL}/repository/maven-public/</url>
+    </mirror>
+  </mirrors>
+</settings>
+```
 
-1. Inside IntelliJ IDEA:
+### 8. Create the staging database (once)
 
-    In the main menu, choose `File -> Open` and select the Petclinic [pom.xml](pom.xml). Click on the `Open` button.
+The pipeline does not create it. Follow [`platform/staging-db/README.md`](platform/staging-db/README.md). In short:
 
-    - CSS files are generated from the Maven build. You can build them on the command line `./mvnw generate-resources` or right-click on the `spring-petclinic` project then `Maven -> Generates sources and Update Folders`.
+```bash
+kubectl create secret generic petclinic-db -n petclinic-staging \
+  --from-literal=username=petclinic \
+  --from-literal=password="$(openssl rand -base64 18 | tr -d '/+=')" \
+  --from-literal=database=petclinic
 
-    - A run configuration named `PetClinicApplication` should have been created for you if you're using a recent Ultimate version. Otherwise, run the application by right-clicking on the `PetClinicApplication` main class and choosing `Run 'PetClinicApplication'`.
+kubectl apply -f platform/staging-db/postgres.yaml
+kubectl get pods -n petclinic-staging -w
+```
 
-1. Navigate to the Petclinic
+### 9. Edit the three values in the Jenkinsfile
 
-    Visit [http://localhost:8080](http://localhost:8080) in your browser.
+In the `environment` block, set `IMAGE_REPO` (your Docker Hub repository), `SONAR_ORG`, and `SONAR_PROJECT`. None of them is a secret.
 
-## Looking for something in particular?
+### 10. Create the job and run it
 
-|Spring Boot Configuration | Class or Java property files  |
-|--------------------------|---|
-|The Main Class | [PetClinicApplication](https://github.com/spring-projects/spring-petclinic/blob/main/src/main/java/org/springframework/samples/petclinic/PetClinicApplication.java) |
-|Properties Files | [application.properties](https://github.com/spring-projects/spring-petclinic/blob/main/src/main/resources) |
-|Caching | [CacheConfiguration](https://github.com/spring-projects/spring-petclinic/blob/main/src/main/java/org/springframework/samples/petclinic/system/CacheConfiguration.java) |
+Create a **Pipeline** job named `petclinic-ci`: Pipeline script from SCM, Git, your fork, branch `main`, script path `Jenkinsfile`. Tick **Poll SCM** with `H/2 * * * *`. Then press **Build Now**.
 
-## Interesting Spring Petclinic branches and forks
+Watch the pods appear and disappear:
 
-The Spring Petclinic "main" branch in the [spring-projects](https://github.com/spring-projects/spring-petclinic)
-GitHub org is the "canonical" implementation based on Spring Boot and Thymeleaf. There are
-[quite a few forks](https://spring-petclinic.github.io/docs/forks.html) in the GitHub org
-[spring-petclinic](https://github.com/spring-petclinic). If you are interested in using a different technology stack to implement the Pet Clinic, please join the community there.
+```bash
+kubectl get pods -n jenkins-system -w
+```
 
-## Interaction with other open-source projects
+The build stops at **Approve Staging**. Press **Deploy** to continue.
 
-One of the best parts about working on the Spring Petclinic application is that we have the opportunity to work in direct contact with many Open Source projects. We found bugs/suggested improvements on various topics such as Spring, Spring Data, Bean Validation and even Eclipse! In many cases, they've been fixed/implemented in just a few days.
-Here is a list of them:
+### 11. Check the result
 
-| Name | Issue |
-|------|-------|
-| Spring JDBC: simplify usage of NamedParameterJdbcTemplate | [SPR-10256](https://github.com/spring-projects/spring-framework/issues/14889) and [SPR-10257](https://github.com/spring-projects/spring-framework/issues/14890) |
-| Bean Validation / Hibernate Validator: simplify Maven dependencies and backward compatibility |[HV-790](https://hibernate.atlassian.net/browse/HV-790) and [HV-792](https://hibernate.atlassian.net/browse/HV-792) |
-| Spring Data: provide more flexibility when working with JPQL queries | [DATAJPA-292](https://github.com/spring-projects/spring-data-jpa/issues/704) |
+```bash
+kubectl get deploy petclinic -n petclinic-dev -o jsonpath='{.spec.template.spec.containers[0].image}'
+kubectl port-forward svc/petclinic 8080:80 -n petclinic-dev
+curl -s localhost:8080/actuator/health
+```
 
-## Contributing
+The image tag must match the commit, and the health answer must show `UP`. In staging, add an owner, restart the application pod, and the owner is still there, because the data is in PostgreSQL.
 
-The [issue tracker](https://github.com/spring-projects/spring-petclinic/issues) is the preferred channel for bug reports, feature requests and submitting pull requests.
+### Stop and clean up
 
-For pull requests, editor preferences are available in the [editor config](.editorconfig) for easy use in common text editors. Read more and download plugins at <https://editorconfig.org>. All commits must include a __Signed-off-by__ trailer at the end of each commit message to indicate that the contributor agrees to the Developer Certificate of Origin.
-For additional details, please refer to the blog post [Hello DCO, Goodbye CLA: Simplifying Contributions to Spring](https://spring.io/blog/2025/01/06/hello-dco-goodbye-cla-simplifying-contributions-to-spring).
+To pause for a few days, scale the stateful applications down first, so they close their files cleanly, then stop the node containers:
 
-## License
+```bash
+kubectl scale deploy/jenkins -n jenkins-system --replicas=0
+kubectl scale deploy/nexus -n nexus-system --replicas=0
+kubectl scale deploy/petclinic -n petclinic-dev --replicas=0
+kubectl scale deploy/petclinic -n petclinic-staging --replicas=0
+kubectl scale statefulset/petclinic-db -n petclinic-staging --replicas=0
 
-The Spring PetClinic sample application is released under version 2.0 of the [Apache License](https://www.apache.org/licenses/LICENSE-2.0).
+docker stop petclinic-cluster-worker petclinic-cluster-worker2 petclinic-cluster-control-plane
+```
+
+To resume, start the control plane first, wait until the nodes are `Ready`, then scale everything back to 1:
+
+```bash
+docker start petclinic-cluster-control-plane
+docker start petclinic-cluster-worker petclinic-cluster-worker2
+kubectl get nodes
+```
+
+If `kubectl` cannot connect after a restart, run `kind export kubeconfig --name petclinic-cluster`. While the cluster is stopped, never run `docker system prune` or `docker container prune`, because they remove stopped containers, and the node containers hold all the data.
+
+To remove everything:
+
+```bash
+kind delete cluster --name petclinic-cluster
+```
+
+This deletes all data: Jenkins jobs, Nexus content, and the staging database.
+
+## Repository map
+
+```
+.
+├── README.md
+├── Jenkinsfile                 the pipeline: what runs and in which pod
+├── Dockerfile                  runtime image: packages the tested jar only
+├── .dockerignore
+├── k8s/                        deployed by the PIPELINE
+│   ├── dev/                    deployment.yaml, service.yaml
+│   └── staging/                deployment.yaml, service.yaml
+├── platform/                   applied BY HAND
+│   ├── kind/                   cluster definition
+│   ├── jenkins/                Jenkins controller
+│   ├── nexus/                  Nexus
+│   ├── rbac/                   deploy permissions for dev and staging
+│   └── staging-db/             PostgreSQL, and the steps for its Secret
+├── docs/
+│   ├── upstream-README.md      the original PetClinic README
+│   └── images/                 screenshots
+└── src/, pom.xml, ...          the application, unchanged
+```
+
+The shared library is a separate repository: `petclinic-shared-library` (`vars/` has the functions, `resources/pods/` has the agent pod templates).
+
+Why two folders for YAML: `k8s/` holds only what the pipeline deploys. `platform/` holds the tools and the database, which have their own owner and lifecycle and are applied by a person.
+
+## Results
+
+All numbers below were measured on one 14 GB laptop. Replace each `TBD` with your own value.
+
+| Measure | Before | After |
+| --- | --- | --- |
+| Trivy HIGH and CRITICAL findings in the image | 11 (5 critical, 6 high) | TBD |
+| Image size | TBD | TBD |
+| Maven time, first run through Nexus | TBD | n/a |
+| Maven time, second run through Nexus | TBD | TBD |
+| Agent pods per build | 1 (single pod design) | 4 (per-job pods) |
+| Memory requests held while waiting at the approval | TBD | none |
+| Time from a failed deploy to the old version serving again | n/a | TBD |
+
+The 11 findings were in Tomcat, Spring MVC, the PostgreSQL driver, and Jackson. They were fixed by upgrading Spring Boot from 4.1.0 to 4.1.1, and the scan was repeated.
+
+Screenshots to add in `docs/images/`:
+
+- `pipeline-green.png`: a full successful run
+- `rollback.png`: a red build, with the automatic rollback
+- `sonar-overview.png`: the SonarQube Cloud overview
+- `nexus-repos.png`: the stored jar versions
+- `trivy-before-after.png`: the scan result before and after the fix
+- `rbac-can-i.png`: yes for patch, no for delete
+
+## Design decisions
+
+The main ones:
+
+| Decision | Reason |
+| --- | --- |
+| Jenkins agents are pods, and the controller runs no builds | Clean environment every build, and a bad build cannot hurt the controller |
+| Kaniko builds a file, and a separate step pushes | The image is scanned before it reaches a registry |
+| Build the jar once, store it in Nexus, copy it into the image | The artifact that passed the tests is the one that ships |
+| Role per namespace, a deploy account that cannot delete | Least privilege, and a blast radius of one namespace |
+| Database managed by hand, outside the application pipeline | Separate owner and lifecycle |
+| SonarQube Cloud instead of self-hosting | Limited laptop memory, and the pipeline step is identical |
+
+## Lessons learned and known limits
+
+A few problems from building it that changed how I work:
+
+- A green image build does not prove the image works. A wrong `COPY` path built fine and the pod crashed. The failed rollout triggered the rollback, and I now test an image locally before it goes into the pipeline.
+- Read the printed command and the events before guessing. A message about old replicas pending termination looked like a slow shutdown, but the new pod was crashing.
+- Project rules apply to new files too. The application's Maven build fails on plain `http` links in any file.
+
+Known limits, stated honestly:
+
+- Dev uses H2, so its data is lost on restart and it must run one replica.
+- Dev and staging share one cluster, which is not real isolation.
+- The publish step builds the jar again with the commit in its version. The tests ran earlier on the same commit, but the uploaded file is a new build of it.
+- The image is one layer for the jar, so every code change rebuilds that layer.
+- Some image tags (Jenkins, Nexus, base images) are not pinned to exact versions.
+- There is no ingress and no TLS. Access uses port-forward and service names.
+- Everything runs on one machine, so there is no high availability.
+
+## Roadmap
+
+- [ ] A second small application that uses the shared library unchanged
+- [ ] A pipeline template in the library (the whole flow in one call)
+- [ ] Helm or Kustomize for the manifests, or Argo CD for GitOps
+- [ ] Pin all image tags, and cache the Trivy database and Maven downloads
+- [ ] The same platform in a cloud cluster, provisioned with Terraform
+- [ ] Monitoring with Prometheus and Grafana
+
+## About the application
+
+The application is the Spring PetClinic sample from the Spring team. This repository keeps its code unchanged. The original README, with the instructions for running it locally and in an IDE, is in [`docs/upstream-README.md`](docs/upstream-README.md).
+
+## Credits and license
+
+- Spring PetClinic is a project of the Spring team: [spring-projects/spring-petclinic](https://github.com/spring-projects/spring-petclinic).
+- The application and this repository are released under the [Apache License 2.0](LICENSE.txt).
+
+**Suggested GitHub topics:** `jenkins` `kubernetes` `kind` `ci-cd` `devsecops` `shared-library` `kaniko` `trivy` `sonarqube` `nexus` `rbac` `rollback` `spring-boot` `platform-engineering`

@@ -1,3 +1,12 @@
+# =============================================================================
+# PetClinic in the dev namespace. Deployed by the PIPELINE (function deployToK8s).
+# Do NOT run "kubectl apply" on this file by hand. IMAGE_PLACEHOLDER is replaced
+# with the real image (repo and commit tag) by sed in the pipeline first.
+# Database: none. The app uses H2, an in-memory database inside the app process,
+# so data is lost when the pod restarts. That is why replicas is 1: two pods
+# would each have a different H2 database.
+# Staging uses the same image with Postgres (k8s/staging/deployment.yaml).
+# =============================================================================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -7,7 +16,7 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      app: petclinic
+      app: petclinic          # must match the pod labels below and the Service selector
   template:
     metadata:
       labels:
@@ -16,20 +25,29 @@ spec:
       containers:
         - name: petclinic
           image: IMAGE_PLACEHOLDER
+          # Use the image on the node if it is already there. Known limit: if the same
+          # commit is rebuilt, the tag on the registry changes, but a node that already
+          # has the old image keeps using it.
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
+          # Three probes, all from Spring Boot Actuator health groups:
+          # startupProbe   gives a slow start up to 5 s x 30 = 150 s. The other
+          #                probes wait until it succeeds.
           startupProbe:
             httpGet:
               path: /actuator/health/liveness
               port: 8080
             periodSeconds: 5
             failureThreshold: 30
+          # readinessProbe decides if the pod receives traffic. Also what
+          #                "kubectl rollout status" waits for.
           readinessProbe:
             httpGet:
               path: /actuator/health/readiness
               port: 8080
             periodSeconds: 10
+          # livenessProbe  if it keeps failing, Kubernetes restarts the container.
           livenessProbe:
             httpGet:
               path: /actuator/health/liveness
@@ -37,7 +55,8 @@ spec:
             periodSeconds: 20
           resources:
             requests:
-              memory: "512Mi"
+              memory: "512Mi"     # reserved on the node (used for scheduling)
               cpu: "250m"
             limits:
-              memory: "1Gi"
+              memory: "1Gi"       # above this the container is killed. The JVM heap is 75 percent
+                                  # of it (MaxRAMPercentage in the Dockerfile)

@@ -1,0 +1,93 @@
+# =============================================================================
+# Staging database: PostgreSQL in petclinic-staging
+# Applied BY HAND, not by the pipeline. The database has its own owner and
+# lifecycle. See platform/staging-db/README.md for the steps and the Secret.
+#
+# Prerequisite: the Secret petclinic-db (keys: username, password, database).
+# It is created by hand and never stored in Git.
+# Used by: k8s/staging/deployment.yaml (the app reads the same Secret).
+# =============================================================================
+
+# Headless Service (clusterIP: None): no virtual IP, only a stable DNS name for the pod.
+# The app connects to: petclinic-db:5432. The name must match serviceName below.
+apiVersion: v1
+kind: Service
+metadata:
+  name: petclinic-db
+  namespace: petclinic-staging
+spec:
+  clusterIP: None
+  selector:
+    app: petclinic-db
+  ports:
+    - port: 5432
+---
+# A StatefulSet (not a Deployment) because a database needs a stable identity
+# and its own volume. The pod is always named petclinic-db-0.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: petclinic-db
+  namespace: petclinic-staging
+spec:
+  serviceName: petclinic-db
+  replicas: 1                       # one primary. No replication in this project.
+  selector:
+    matchLabels:
+      app: petclinic-db
+  template:
+    metadata:
+      labels:
+        app: petclinic-db
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            # All three values come from the Secret. Postgres uses them only on
+            # its FIRST start with an empty volume. Changing the Secret later
+            # does not change the stored password.
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: {name: petclinic-db, key: username}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: petclinic-db, key: password}
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef: {name: petclinic-db, key: database}
+            # A new volume contains a lost+found folder, and Postgres refuses to
+            # start in a folder that is not empty. Use a sub-folder.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          # The user name petclinic is written here, not read from the Secret.
+          # If the Secret's username is different, this probe fails and the pod
+          # never becomes ready.
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "petclinic"]
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+  # A template: Kubernetes creates one PVC per pod from it (data-petclinic-db-0).
+  # The StorageClass is the default one, so kind provisions the volume. In the
+  # cloud, the same lines would create a cloud disk.
+  # Deleting the pod keeps the data. Deleting the StatefulSet does not delete
+  # the PVC. Deleting the cluster deletes everything.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi

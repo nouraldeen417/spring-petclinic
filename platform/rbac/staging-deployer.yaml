@@ -1,3 +1,13 @@
+# =============================================================================
+# Deploy rights for the pipeline in petclinic-staging
+# Needs the ServiceAccount jenkins-deployer, which is created in
+# platform/rbac/dev-deployer.yaml. Apply that file first.
+#   kubectl apply -f platform/rbac/staging-deployer.yaml
+#
+# Same rules as dev, on purpose: the same pipeline functions deploy to both.
+# It cannot read Secrets and cannot delete anything. The database and its
+# Secret are managed by hand (platform/staging-db/README.md).
+# =============================================================================
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -7,6 +17,8 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # pods get/list/watch is also what "kubectl wait" needs for the database check
+  # in the staging deploy step.
   - apiGroups: [""]
     resources: ["services", "pods", "configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]

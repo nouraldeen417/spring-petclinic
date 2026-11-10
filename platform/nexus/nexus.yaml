@@ -1,0 +1,102 @@
+# =============================================================================
+# Nexus Repository, in the namespace nexus-system
+# Apply by hand:
+#   kubectl create namespace nexus-system
+#   kubectl apply -f platform/nexus/nexus.yaml
+# Open it from the laptop (port 8081 is used by the Jenkins mapping):
+#   kubectl port-forward svc/nexus 8082:8081 -n nexus-system   -> localhost:8082
+# First admin password:
+#   kubectl exec -n nexus-system deploy/nexus -- cat /nexus-data/admin.password
+#
+# Role in the pipeline: a Maven proxy (cache of dependencies) and a hosted
+# repository for the versioned jars.
+#
+# Known improvement: pin the image tag. No tag means the newest version.
+# =============================================================================
+
+# Storage for the Nexus data: cached libraries, stored jars, settings.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nexus-data
+  namespace: nexus-system
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus
+  namespace: nexus-system
+spec:
+  replicas: 1
+  # Recreate: stop the old pod before starting a new one. Only one Nexus may
+  # use the data folder, and the volume is ReadWriteOnce.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: nexus
+  template:
+    metadata:
+      labels:
+        app: nexus
+    spec:
+      securityContext:
+        fsGroup: 200               # the Nexus process runs as user 200 and must write to /nexus-data
+      containers:
+        - name: nexus
+          image: sonatype/nexus3
+          ports:
+            - containerPort: 8081
+          env:
+            # Memory of the Nexus Java process (it is a Java app; this says nothing
+            # about Maven). Heap 1 GB plus direct memory 1 GB is smaller than the
+            # vendor example. Raise it if Nexus is slow or gets OOMKilled.
+            # The last option keeps Java preferences on the volume.
+            - name: INSTALL4J_ADD_VM_PARAMS
+              value: "-Xms1g -Xmx1g -XX:MaxDirectMemorySize=1g -Djava.util.prefs.userRoot=/nexus-data/javaprefs"
+          volumeMounts:
+            - name: data
+              mountPath: /nexus-data
+          # The first start takes minutes. The startup probe waits up to
+          # 36 x 10 s = 6 minutes before the other probes begin.
+          startupProbe:
+            httpGet:
+              path: /service/rest/v1/status
+              port: 8081
+            periodSeconds: 10
+            failureThreshold: 36
+          readinessProbe:
+            httpGet:
+              path: /service/rest/v1/status
+              port: 8081
+            periodSeconds: 15
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "500m"
+            limits:
+              memory: "3500Mi"     # must be above heap + direct memory + JVM overhead
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: nexus-data
+---
+# ClusterIP: reachable only inside the cluster. Maven in the agent pods uses
+# the address from the NEXUS_URL Jenkins variable, which points to this Service
+# (nexus.nexus-system.svc.cluster.local, port 8081).
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus
+  namespace: nexus-system
+spec:
+  selector:
+    app: nexus
+  ports:
+    - port: 8081
+      targetPort: 8081

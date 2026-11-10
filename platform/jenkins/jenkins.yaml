@@ -1,0 +1,139 @@
+# =============================================================================
+# Jenkins controller, in the namespace jenkins-system
+# Apply by hand (not by the pipeline):
+#   kubectl create namespace jenkins-system
+#   kubectl apply -f platform/jenkins/jenkins.yaml
+# First login password:
+#   kubectl exec -n jenkins-system deploy/jenkins -- cat /var/jenkins_home/secrets/initialAdminPassword
+#
+# Contents: ServiceAccount, Role, RoleBinding, PVC, Deployment, Service.
+#
+# Known improvements (see docs/decisions.md):
+#   - Strategy: add "strategy: type: Recreate" to the Deployment. The volume is
+#     ReadWriteOnce, so a rolling update can leave two pods fighting for it.
+#   - Pin the image tag (for example a full LTS version) instead of lts-jdk17.
+#   - Port 50000 is not used, because agents connect over WebSocket on 8080.
+# =============================================================================
+
+# Identity of the Jenkins controller pod. It is used to create AGENT pods.
+# (The deploy rights are in a different account: jenkins-deployer.)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins
+  namespace: jenkins-system
+---
+# What the controller may do, in jenkins-system only (a Role, not a ClusterRole).
+# This is the set the Kubernetes plugin needs to run build pods.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jenkins
+  namespace: jenkins-system
+rules:
+  # Create, watch and delete agent pods, and run commands inside them (exec).
+  - apiGroups: [""]
+    resources: ["pods", "pods/exec"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  # Read agent logs.
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list", "watch"]
+  # Follow pod events (why a pod is pending or failed).
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["watch"]
+  # I believe this is for reading secrets used by agent pods. Confirm in the
+  # Kubernetes plugin documentation before removing it.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+# Gives the Role to the ServiceAccount.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins
+  namespace: jenkins-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: jenkins
+subjects:
+  - kind: ServiceAccount
+    name: jenkins
+    namespace: jenkins-system
+---
+# Storage for JENKINS_HOME (jobs, plugins, credentials, config).
+# No StorageClass is named, so kind's default one creates the volume
+# automatically (dynamic provisioning). Restarting the pod keeps the data.
+# Deleting the cluster does not.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jenkins-home
+  namespace: jenkins-system
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jenkins
+  namespace: jenkins-system
+spec:
+  replicas: 1                      # Jenkins is not built to run twice on one home folder
+  selector:
+    matchLabels:
+      app: jenkins
+  template:
+    metadata:
+      labels:
+        app: jenkins
+    spec:
+      serviceAccountName: jenkins
+      securityContext:
+        fsGroup: 1000              # the jenkins user (1000) must be able to write to the volume
+      containers:
+        - name: jenkins
+          image: jenkins/jenkins:lts-jdk17
+          ports:
+            - containerPort: 8080  # web UI and WebSocket agent connections
+            - containerPort: 50000 # classic agent port, not used in this project
+          volumeMounts:
+            - name: jenkins-home
+              mountPath: /var/jenkins_home
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"        # at 1Gi the pod was killed (exit code 137) while building
+      volumes:
+        - name: jenkins-home
+          persistentVolumeClaim:
+            claimName: jenkins-home
+---
+# NodePort makes the UI reachable from the laptop through the kind port mapping.
+# Agent pods do NOT use this. They reach Jenkins by the Service DNS name:
+#   jenkins.jenkins-system.svc.cluster.local on port 8080 (set in the Jenkins cloud config).
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins
+  namespace: jenkins-system
+spec:
+  type: NodePort
+  selector:
+    app: jenkins
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30080              # must match containerPort in platform/kind/kind-config.yaml
+    - name: agent
+      port: 50000
+      targetPort: 50000

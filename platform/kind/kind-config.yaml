@@ -1,0 +1,25 @@
+# =============================================================================
+# kind cluster: petclinic-cluster
+# Create it : kind create cluster --config platform/kind/kind-config.yaml
+# Delete it : kind delete cluster --name petclinic-cluster
+#             WARNING: this deletes all data (Jenkins jobs, Nexus, databases).
+# Port mapping can only be set at creation time. To change it, recreate the cluster.
+# =============================================================================
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: petclinic-cluster
+nodes:
+  # One control plane and two workers, so scheduling across nodes can be seen
+  # and tested, not only a single-node cluster.
+  - role: control-plane
+    extraPortMappings:
+      # kind runs inside Docker, so a NodePort is not reachable from the laptop.
+      # This maps a laptop port to the NodePort of the Jenkins Service.
+      # Browser: localhost:8081 -> node port 30080 -> Jenkins (port 8080)
+      # Must match nodePort in platform/jenkins/jenkins.yaml.
+      # Port 8081 is taken, so Nexus is reached with kubectl port-forward on 8082.
+      - containerPort: 30080   # Jenkins NodePort
+        hostPort: 8081         # laptop port
+        protocol: TCP
+  - role: worker
+  - role: worker

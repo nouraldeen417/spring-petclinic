@@ -1,3 +1,9 @@
+# =============================================================================
+# Stable address for the dev pods. Applied by the pipeline (deployToK8s).
+# ClusterIP: reachable only inside the cluster. The smoke test reaches it as
+#   petclinic.petclinic-dev.svc.cluster.local (port 80)
+# From the laptop, use: kubectl port-forward svc/petclinic 8080:80 -n petclinic-dev
+# =============================================================================
 apiVersion: v1
 kind: Service
 metadata:
@@ -7,9 +13,11 @@ metadata:
     app: petclinic
 spec:
   type: ClusterIP
+  # Sends traffic to pods with this label. If it does not match the Deployment's
+  # pod labels, the Service has no endpoints and the smoke test fails.
   selector:
     app: petclinic
   ports:
     - name: http
-      port: 80
-      targetPort: 8080
+      port: 80                # the port clients use
+      targetPort: 8080        # the container port

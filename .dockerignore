@@ -1,6 +1,12 @@
-# Build output
+# =============================================================================
+# Files that must NOT be sent to the image build (smaller, faster, safer).
+# The Dockerfile only needs dist/app.jar, so dist/ must NOT be listed here.
+# =============================================================================
+
+# Build output. The jar comes from dist/, not from target/.
 target/
 build/
+# The image file written by Kaniko in an earlier step.
 image.tar
 *.tar
 
@@ -10,10 +16,10 @@ image.tar
 .github/
 Jenkinsfile
 
-# Kubernetes and infra files (not needed inside the image)
+# Kubernetes, platform and documentation files (not needed inside the image)
 k8s/
-infra/
-kind-config.yaml
+platform/
+docs/
 
 # Docker files
 Dockerfile
